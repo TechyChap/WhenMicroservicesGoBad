@@ -1,28 +1,43 @@
 ﻿using Polly;
+using Polly.Fallback;
+using Polly.Retry;
 
-Console.WriteLine("Chained Policies");
+Console.WriteLine("Chained Pipelines");
 
-var retrypolicy = Policy
-              .Handle<Exception>()
-              .Retry();
+var retryPipeline = new ResiliencePipelineBuilder()
+    .AddRetry(new RetryStrategyOptions()
+    {
+        Delay = TimeSpan.FromSeconds(5)
+    }) 
+    .Build();  
 
-var retryThenFallbackPolicy = Policy
-              .Handle<Exception>()
-              .Fallback(() => { Console.WriteLine("Doing Fallback"); })
-              .Wrap(retrypolicy);
+var fallbackPipeline = new ResiliencePipelineBuilder<string>()
+    .AddFallback(new FallbackStrategyOptions<string>
+    {
+        FallbackAction = args =>
+        {
+            Console.WriteLine("Doing Fallback");
+            return Outcome.FromResultAsValueTask("SomeDefaultValue");
+        }
+    })
+    .Build();
 
-//See https://github.com/Polly-Contrib/Polly.Contrib.WaitAndRetry for a more sophisticate retry
+var pipeline = new ResiliencePipelineBuilder<string>()
+    .AddPipeline(fallbackPipeline)
+    .AddPipeline(retryPipeline)     // Ordering is important
+    .Build();
 
     try
     {
-        retryThenFallbackPolicy.Execute(() => DoSomething());
+        var result = pipeline.Execute(() => DoSomething());
+        Console.WriteLine(result);
     }
     catch
     {
         Console.WriteLine("Doing thing errored");
     }
 
-void DoSomething()
+string DoSomething()
 {
     Console.WriteLine("Doing Thing");
     throw new Exception();

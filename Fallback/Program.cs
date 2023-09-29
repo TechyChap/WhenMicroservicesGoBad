@@ -1,20 +1,21 @@
 ﻿using Polly;
+using Polly.Fallback;
 
 Console.WriteLine("Fallback Policies");
 
-var policy = Policy
-              .Handle<Exception>()
-              .Fallback(() => { Console.WriteLine("Doing Fallback"); });
-
-/* Can be combined with other policies
-   https://andrewlock.net/when-you-use-the-polly-circuit-breaker-make-sure-you-share-your-policy-instances-2/
-   Can pass parameters to fallback by defining a execute/fallback context
-   https://stackoverflow.com/questions/69190092/send-parameters-to-fallback-action-in-polly
-*/
+var pipeline = new ResiliencePipelineBuilder<string>()
+        .AddFallback(new FallbackStrategyOptions<string>
+        {
+            FallbackAction = args =>
+                { Console.WriteLine("Doing Fallback"); 
+                  return Outcome.FromResultAsValueTask("SomeDefaultValue");
+                }
+        })
+        .Build();
 
     try
     {
-        policy.Execute(() => DoSomething() );
+        var result = pipeline.Execute(() => DoSomething() );
     }
     catch
     {
@@ -23,7 +24,7 @@ var policy = Policy
 
 
 
-void DoSomething()
+string DoSomething()
 {
     Console.WriteLine("Doing Thing");
     throw new Exception();

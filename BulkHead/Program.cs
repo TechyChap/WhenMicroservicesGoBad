@@ -1,15 +1,18 @@
 ﻿using Polly;
+using Polly.RateLimiting;
 
-Console.WriteLine("RateLimit Policies");
+Console.WriteLine("Concurrency Limiter (was called bulkhead)");
 
-var policy = Policy.Bulkhead(5);
+var pipeline = new ResiliencePipelineBuilder()
+    .AddConcurrencyLimiter(5,2)
+    .Build();
 
-    Parallel.For(1, 50, (runNo) =>
+Parallel.For(1, 50, (runNo) =>
     {
         try
         {
             //DoSomething(runNo);
-            policy.Execute(() => DoSomething(runNo));
+            pipeline.Execute(() => DoSomething(runNo));
         }
         catch (Exception ex)
         {
