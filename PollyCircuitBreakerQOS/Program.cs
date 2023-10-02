@@ -1,41 +1,54 @@
 ﻿using Polly;
 using Polly.CircuitBreaker;
+using Polly.Fallback;
 
 var rnd = new Random();
 
 Console.WriteLine("Testing QOS Policies");
 Console.WriteLine("Ctrl+c to terminate");
 
-var policyHigh = Policy
-              .Handle<Exception>()
-              .LoggingCircuitBreaker(
-                exceptionsAllowedBeforeBreaking: 5,
-                durationOfBreak: TimeSpan.FromSeconds(5),
-                name: "High Priority Breaker"
-              );
+var highPriorityPipe = new ResiliencePipelineBuilder()
+    .AddLoggingCircuitBreaker(new CircuitBreakerStrategyOptions()
+    {
+        BreakDuration = new TimeSpan(0, 0, 5),
+        SamplingDuration = new TimeSpan(0, 0, 1),
+        FailureRatio = 0.9,
+        MinimumThroughput = 2,
+        Name = "High"
+    })
+    .Build();
 
-var policyMedium = Policy
-              .Handle<Exception>()
-              .LoggingCircuitBreaker(
-                exceptionsAllowedBeforeBreaking: 3,
-                durationOfBreak: TimeSpan.FromSeconds(10),
-                name: "Medium Priority Breaker"
-              ).Wrap(policyHigh);
+var mediumPriorityPipeline = new ResiliencePipelineBuilder()
+    .AddPipeline(highPriorityPipe)
+    .AddLoggingCircuitBreaker(new CircuitBreakerStrategyOptions()
+        {
+            BreakDuration = new TimeSpan(0, 0, 10),
+            SamplingDuration = new TimeSpan(0, 0, 1),
+            FailureRatio = 0.7,
+            MinimumThroughput = 2,
+            Name = "Medium"
+        })
+    .Build();
 
-var policyLow = Policy
-              .Handle<Exception>()
-              .LoggingCircuitBreaker(
-                exceptionsAllowedBeforeBreaking: 2,
-                durationOfBreak: TimeSpan.FromSeconds(20),
-                name: "Low Priority Breaker"
-              )
-              .Wrap(policyMedium);
+var lowPriorityPipeline = new ResiliencePipelineBuilder()
+    .AddPipeline(highPriorityPipe)
+    .AddPipeline(mediumPriorityPipeline)
+    .AddLoggingCircuitBreaker(new CircuitBreakerStrategyOptions()
+    {
+        BreakDuration = new TimeSpan(0, 0, 20),
+        SamplingDuration = new TimeSpan(0, 0, 1),
+        FailureRatio = 0.2,
+        MinimumThroughput = 2,
+        Name = "Low"
+    })
+    .Build();
+
 
 while (true)
 {
-    policyLow.TryCatchExecute(() => CallAPI("Low "));
-    policyMedium.TryCatchExecute(() => CallAPI("Med "));
-    policyHigh.TryCatchExecute(() => CallAPI("High "));
+    lowPriorityPipeline.TryCatchExecute(()=> CallAPI("Low "));
+    mediumPriorityPipeline.TryCatchExecute(() => CallAPI("Med "));
+    highPriorityPipe.TryCatchExecute(() => CallAPI("High "));
 }
 
 
@@ -43,7 +56,7 @@ void CallAPI(string message)
 {
     //Fake API Call
     Console.Write(message);
-    if (rnd.Next(10) > 6 ) {
+    if (rnd.Next(10) > 8 ) {
         throw new Exception("Rate Limiting Applied");
     }
     Thread.Sleep(100);  
@@ -51,11 +64,11 @@ void CallAPI(string message)
 
 public static class PollyExtention
 {
-    public static void TryCatchExecute(this Policy p, Action a)
+    public static void TryCatchExecute(this ResiliencePipeline p, Action a)
     {
         try
         {
-            p.Execute(() => a());
+            p.Execute(a);
         }
         catch (BrokenCircuitException)
         {
@@ -67,22 +80,19 @@ public static class PollyExtention
         }
     }
 
-    public static CircuitBreakerPolicy LoggingCircuitBreaker(this PolicyBuilder builder, int exceptionsAllowedBeforeBreaking, TimeSpan durationOfBreak, string name)
+    public static ResiliencePipelineBuilder AddLoggingCircuitBreaker(this ResiliencePipelineBuilder builder, CircuitBreakerStrategyOptions options)
     {
-        return builder.CircuitBreaker(
-                exceptionsAllowedBeforeBreaking: exceptionsAllowedBeforeBreaking,
-                durationOfBreak: durationOfBreak,
-                onBreak: (ex, breakDelay) =>
-                {
-                    Console.WriteLine($"\n{name}: Breaking the circuit for " + breakDelay.TotalMilliseconds + "ms!", ex);
-                },
-                onReset: () =>
-                {
-                    Console.WriteLine($"\n{name}: Call ok! Closed the circuit again.");
-                },
-                onHalfOpen: () =>
-                {
-                    Console.WriteLine($"\n{name}: Half-open; next call is a trial.");
-                });
+        options.OnOpened += args =>
+        {
+            Console.WriteLine(
+                $"\n{options.Name}: Breaking the circuit for {args.BreakDuration.TotalMilliseconds} ms! {args.Outcome.Exception?.Message}");
+            return ValueTask.CompletedTask;
+        };
+        options.OnClosed += args =>
+        {
+            Console.WriteLine($"\n{options.Name}: Closing the circuit");
+            return ValueTask.CompletedTask;
+        };
+        return builder.AddCircuitBreaker(options);
     }
 }
